@@ -63,6 +63,10 @@ public class Coordinator {
     Condition queryCondVar = queryLock.newCondition();
     String queryResponse = "FAILED";
 
+    Lock deleteLock = new ReentrantLock();
+    Condition deleteCondVar = deleteLock.newCondition();
+    String deleteResponse = "FAILED";
+
     private Coordinator(Activity parentActivity) {
         this.parentActivity = parentActivity;
 
@@ -209,10 +213,15 @@ public class Coordinator {
             case INSERT:
                 newMessage.setMessageText("Inserting");
                 break;
-
+            case QUERY:
+                newMessage.setMessageText("Querying");
+                break;
+            case DELETE:
+                newMessage.setMessageText("Deleting");
+                break;
             default:
-                Log.e(TAG, "Wrong Message type to build, type:" +type);
-                return null;
+                Log.v(TAG, "Building message, type:" +type);
+                return newMessage;
         }
         return newMessage;
     }
@@ -305,7 +314,7 @@ public class Coordinator {
                 // acquire the join lock and proceed
                 joinLock.lock();
 
-                if(amIResponsible("" + sourceId)){
+                if(amIResponsible("" + sourceId/2)){
                     // forward the request to myself
                     handledMessage.setType(Message.TYPE.JOIN_REQUEST_FORWARD);
                     handledMessage.setSenderId(MY_PORT);
@@ -321,7 +330,7 @@ public class Coordinator {
                 }
                 break;
             case JOIN_REQUEST_FORWARD:
-                if(amIResponsible("" + sourceId)){
+                if(amIResponsible("" + sourceId/2)){
                     // send predecessor info to joiner and add it as the predecessor
                     String joinResponse = createJoinResponse();
                     handledMessage.setType(Message.TYPE.JOIN_RESPONSE);
@@ -341,6 +350,9 @@ public class Coordinator {
 //                    }
 
                     Log.v(TAG, "JOIN: Added "+ sourceId
+                            +"\nMy Predecessor: " +predecessor+" My Successor: " +successor);
+
+                    displayMessage("JOIN: Added "+ sourceId
                             +"\nMy Predecessor: " +predecessor+" My Successor: " +successor);
 
                     // send join completed message to INTRODUCER
@@ -369,6 +381,10 @@ public class Coordinator {
                     updatePredecessor(messageJSON.getInt("predecessor"));
                     Log.v(TAG, "JOIN: Added by " + senderId
                             + "\nMy Predecessor: " + predecessor + " My Successor: " + successor);
+
+                    displayMessage("JOIN: Added by " + senderId
+                            + "\nMy Predecessor: " + predecessor + " My Successor: " + successor);
+
                 } catch (JSONException e) {
                     Log.e(TAG, "Unable tp parse Join Respose: ", e);
                 }
@@ -395,6 +411,8 @@ public class Coordinator {
                     messageJSON = new JSONObject(handledMessage.getMessageText());
                     updateSuccessor(messageJSON.getInt("successor"));
                     Log.v(TAG, "JOIN: Updated Successor "
+                            + "\nMy Predecessor: " + predecessor + " My Successor: " + successor);
+                    displayMessage("JOIN: Updated Successor "
                             + "\nMy Predecessor: " + predecessor + " My Successor: " + successor);
                 } catch (JSONException e) {
                     Log.e(TAG, "Unable to parse Join Response: ", e);
@@ -473,15 +491,14 @@ public class Coordinator {
                 else{
                     // forward message to succesor
                     handledMessage.setSenderId(MY_PORT);
-                    handledMessage.setMessageText("COMPLETED");
                     mSender.sendMessage(buildJsonMessage(handledMessage), successor);
-                    Log.v(TAG, "INSERT: Forwarded Insert message to: " + successor);
+                    Log.v(TAG, "QUERY: Forwarded Query message to: " + successor);
                 }
                 break;
 
             case QUERY_RESPONSE:
                 // update the response
-                queryResponse = "Query result from " +handledMessage.getSenderId();
+                queryResponse = handledMessage.getMessageText();
                 // notify the condition variable
                 queryLock.lock();
                 queryCondVar.signal();
@@ -493,7 +510,7 @@ public class Coordinator {
                 if(sourceId == MY_PORT) {
                     // message has come back to me, all nodes queried
                     // update the response
-                    queryResponse = "Query result from " + handledMessage.getSenderId();
+                    queryResponse = handledMessage.getMessageText();
                     // notify the condition variable
                     queryLock.lock();
                     queryCondVar.signal();
@@ -511,6 +528,65 @@ public class Coordinator {
                             (resultCursor, handledMessage.getMessageText()));
                     mSender.sendMessage(buildJsonMessage(handledMessage), successor);
                     Log.v(TAG, "QUERY: Query all forwarded to : " + successor);
+                }
+                break;
+
+            case DELETE:
+                if(amIResponsible(key)){
+                    // send delete request to my content provider
+                    ContentResolver mContentResolver = parentActivity.getContentResolver();
+                    int result = mContentResolver.delete(SimpleDhtProvider.CPUri, key, null);
+                    Log.v(TAG, "DELETE: Delete request sent to my Content Provider.");
+
+                    // send delete response message to source id
+                    handledMessage.setType(Message.TYPE.DELETE_RESPONSE);
+                    handledMessage.setSenderId(MY_PORT);
+                    handledMessage.setMessageText(result + "");
+                    mSender.sendMessage(buildJsonMessage(handledMessage), handledMessage.getSourceId());
+                    Log.v(TAG, "DELETE: Sent Delete Response to: " + handledMessage.getSourceId());
+
+                }
+                else{
+                    // forward message to succesor
+                    handledMessage.setSenderId(MY_PORT);
+                    mSender.sendMessage(buildJsonMessage(handledMessage), successor);
+                    Log.v(TAG, "DELETE: Forwarded Delete message to: " + successor);
+                }
+                break;
+            case DELETE_RESPONSE:
+                // update the response
+                deleteResponse = handledMessage.getMessageText();
+                // notify the condition variable
+                deleteLock.lock();
+                deleteCondVar.signal();
+                deleteLock.unlock();
+                break;
+
+            case DELETE_ALL:
+                if(sourceId == MY_PORT) {
+                    // message has come back to me, deleted in all node
+                    deleteResponse = "Delete all initiated by "
+                            + handledMessage.getSourceId() +" completed.";
+                    // notify the condition variable
+                    deleteLock.lock();
+                    deleteCondVar.signal();
+                    deleteLock.unlock();
+                }
+                else {
+                    ContentResolver mContentResolver = parentActivity.getContentResolver();
+                    int result = mContentResolver.delete(SimpleDhtProvider.CPUri, "@", null);
+                    Log.v(TAG, "DELETE: Delete request sent to my Content Provider.");
+
+                    // forward delete request to the successor
+                    handledMessage.setType(Message.TYPE.DELETE_ALL);
+                    handledMessage.setSenderId(MY_PORT);
+
+                    // update the number of rows deleted
+                    result += Integer.parseInt(handledMessage.getMessageText());
+
+                    handledMessage.setMessageText(result + "");
+                    mSender.sendMessage(buildJsonMessage(handledMessage), successor);
+                    Log.v(TAG, "DELETE: Delete all forwarded to : " + successor);
                 }
                 break;
         }
@@ -588,6 +664,8 @@ public class Coordinator {
     {
 
         String keyHash = genHash(key);
+        Log.v("LOOKUP", "Key: " +key +"\nKey Hash: " +keyHash +"\nPredecessor Hash: " +predecessorHash
+                +"\nMy Hash: " +MY_HASH +"\nSuccessor Hash: " +successorHash);
         if((keyHash.compareTo(predecessorHash) > 0  && keyHash.compareTo(MY_HASH) <= 0) ||
                 ((MY_HASH.compareTo(predecessorHash) < 0) &&
                         (keyHash.compareTo(predecessorHash) > 0 || keyHash.compareTo(MY_HASH) <= 0))){

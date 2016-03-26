@@ -13,7 +13,10 @@ public class Message {
         INSERT_COMPLETED(6),
         QUERY(7),
         QUERY_ALL(8),
-        QUERY_RESPONSE(9);
+        QUERY_RESPONSE(9),
+        DELETE(10),
+        DELETE_ALL(11),
+        DELETE_RESPONSE(12);
 
         private final int typeId;
 

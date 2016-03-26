@@ -2,6 +2,7 @@ package edu.buffalo.cse.cse486586.simpledht;
 
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.database.Cursor;
 import android.os.Bundle;
 import android.app.Activity;
 import android.text.method.ScrollingMovementMethod;
@@ -22,10 +23,10 @@ public class SimpleDhtActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_simple_dht_main);
         
-        TextView tv = (TextView) findViewById(R.id.textView1);
-        tv.setMovementMethod(new ScrollingMovementMethod());
+        final TextView displayView = (TextView) findViewById(R.id.textView1);
+        displayView.setMovementMethod(new ScrollingMovementMethod());
         findViewById(R.id.button3).setOnClickListener(
-                new OnTestClickListener(tv, getContentResolver()));
+                new OnTestClickListener(displayView, getContentResolver()));
 
         // setup to read the editText view and send when the send button is clicked
         final EditText keyEditText = (EditText) findViewById(R.id.keyEditText);
@@ -49,6 +50,50 @@ public class SimpleDhtActivity extends Activity {
                 cv.put("value", value);
                 mContentResolver.insert(SimpleDhtProvider.CPUri, cv);
                 Log.v(TAG, "Trying to insert the message.");
+            }
+        });
+
+        final Button dumpAllButton = (Button) findViewById(R.id.dumpAllButton);
+        dumpAllButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+
+                // insert message in my content provider
+                ContentResolver mContentResolver = getContentResolver();
+                Cursor c = mContentResolver.query(SimpleDhtProvider.CPUri, null, "*", null, null);
+                c.moveToFirst();
+
+                // display the rows
+                while(!c.isAfterLast())
+                {
+                    String returnKey = c.getString(c.getColumnIndex("key"));
+                    String returnValue = c.getString(c.getColumnIndex("value"));
+                    displayView.append("KEY: " + returnKey + " VALUE: " + returnValue + "\n");
+                    c.moveToNext();
+                }
+                c.moveToFirst();
+            }
+        });
+
+        final Button dumpMineButton = (Button) findViewById(R.id.dumpMineButton);
+        dumpMineButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+
+                // insert message in my content provider
+                ContentResolver mContentResolver = getContentResolver();
+                Cursor c = mContentResolver.query(SimpleDhtProvider.CPUri, null, "@", null, null);
+                c.moveToFirst();
+
+                // display the rows
+                while(!c.isAfterLast())
+                {
+                    String returnKey = c.getString(c.getColumnIndex("key"));
+                    String returnValue = c.getString(c.getColumnIndex("value"));
+                    displayView.append("KEY: " + returnKey + " VALUE: " + returnValue + "\n");
+                    c.moveToNext();
+                }
+                c.moveToFirst();
             }
         });
 

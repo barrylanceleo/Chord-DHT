@@ -17,10 +17,6 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Formatter;
-
 public class SimpleDhtProvider extends ContentProvider {
 
     private static final String TAG = "SimpleDhtProvider";
@@ -41,10 +37,27 @@ public class SimpleDhtProvider extends ContentProvider {
         return true;
     }
 
-    @Override
-    public int delete(Uri uri, String selection, String[] selectionArgs) {
-        // TODO Auto-generated method stub
-        return 0;
+    public boolean amIresponsible(String key)
+    {
+        Coordinator mCoordinator = Coordinator.getInstance();
+        return mCoordinator.amIResponsible(key);
+    }
+
+
+    public void printCursor(Cursor c){
+
+        Log.v("TAG", "Query Output:");
+        c.moveToFirst();
+
+        // print the rows
+        while(!c.isAfterLast())
+        {
+            String returnKey = c.getString(c.getColumnIndex("key"));
+            String returnValue = c.getString(c.getColumnIndex("value"));
+            Log.v(TAG, "KEY: " + returnKey + " VALUE: " +returnValue);
+            c.moveToNext();
+        }
+        c.moveToFirst();
     }
 
     @Override
@@ -52,13 +65,6 @@ public class SimpleDhtProvider extends ContentProvider {
         // TODO Auto-generated method stub
         return null;
     }
-
-    public boolean amIresponsible(String key)
-    {
-        Coordinator mCoordinator = Coordinator.getInstance();
-        return mCoordinator.amIResponsible(key);
-    }
-
 
     public Uri plainInsert(Uri uri, ContentValues values)
     {
@@ -98,7 +104,7 @@ public class SimpleDhtProvider extends ContentProvider {
         Coordinator mCoordinator = Coordinator.getInstance();
         String key = values.getAsString("key");
         String value = values.getAsString("value");
-        Log.v(TAG, "INSERT: KEY: " +key +" VALUE: " +value);
+        Log.v(TAG, "INSERT: KEY: " + key + " VALUE: " + value);
 
         if(CPUri.toString().equals(uri.toString()))
         {
@@ -133,6 +139,25 @@ public class SimpleDhtProvider extends ContentProvider {
         }
     }
 
+    Cursor parseQueryResponse(String queryResponse){
+
+        JSONArray messageJSON = null;
+        MatrixCursor cursor = new MatrixCursor(new String[]{"key", "value"});
+        try {
+            messageJSON = new JSONArray(queryResponse);
+            for(int i = 0; i < messageJSON.length(); i++){
+                JSONObject jObject = messageJSON.getJSONObject(i);
+                String key = jObject.getString("key");
+                String value = jObject.getString("value");
+                cursor.addRow(new String[]{key, value});
+            }
+        } catch (JSONException e) {
+            Log.e(TAG, "Exception: Improper Message Format.", e);
+        }
+
+        cursor.moveToFirst();
+        return cursor;
+    }
 
     public Cursor plainQuery(Uri uri, String[] projection, String selection, String[] selectionArgs,
                              String sortOrder){
@@ -155,42 +180,6 @@ public class SimpleDhtProvider extends ContentProvider {
         // Tells the Cursor what URI to watch, so it knows when its source data changes
         c.setNotificationUri(getContext().getContentResolver(), uri);
         return c;
-    }
-
-    void printCursor(Cursor c){
-
-        Log.v("TAG", "Query Output:");
-        c.moveToFirst();
-
-        // print the rows
-        while(!c.isAfterLast())
-        {
-            String returnKey = c.getString(c.getColumnIndex("key"));
-            String returnValue = c.getString(c.getColumnIndex("value"));
-            Log.v(TAG, "KEY: " + returnKey + " VALUE: " +returnValue);
-            c.moveToNext();
-        }
-        c.moveToFirst();
-    }
-
-    Cursor parseQueryResponse(String queryResponse){
-
-        JSONArray messageJSON = null;
-        MatrixCursor cursor = new MatrixCursor(new String[]{"key", "value"});
-        try {
-            messageJSON = new JSONArray(queryResponse);
-            for(int i = 0; i < messageJSON.length(); i++){
-                JSONObject jObject = messageJSON.getJSONObject(i);
-                String key = jObject.getString("key");
-                String value = jObject.getString("value");
-                cursor.addRow(new String[]{key, value});
-            }
-        } catch (JSONException e) {
-            Log.e(TAG, "Exception: Improper Message Format.", e);
-        }
-
-        cursor.moveToFirst();
-        return cursor;
     }
 
     @Override
@@ -234,7 +223,7 @@ public class SimpleDhtProvider extends ContentProvider {
                 printCursor(output);
                 mCoordinator.queryResponse = "FAILED";
 
-                return null;
+                return output;
             }
 
             if(amIresponsible(selection)){
@@ -247,12 +236,12 @@ public class SimpleDhtProvider extends ContentProvider {
             }
             else{
                 // forward query to successor
-                Message queryMessage = mCoordinator.buildMessage(Message.TYPE.INSERT,
+                Message queryMessage = mCoordinator.buildMessage(Message.TYPE.QUERY,
                         selection, "");
                 mCoordinator.mSender.sendMessage(mCoordinator.buildJsonMessage(queryMessage),
                         mCoordinator.successor);
 
-                // wait till we receive a response from the inserted node
+                // wait till we receive a response from the responsible node
                 mCoordinator.queryLock.lock();
                 mCoordinator.queryCondVar.awaitUninterruptibly();
                 mCoordinator.queryLock.unlock();
@@ -271,20 +260,90 @@ public class SimpleDhtProvider extends ContentProvider {
         }
     }
 
+    public int plainDelete(Uri uri, String selection, String[] selectionArgs) {
+
+        SQLiteDatabase db = dbHelper.getWritableDatabase();
+        return db.delete(TABLE_NAME, selection, selectionArgs);
+
+    }
+
+    @Override
+    public int delete(Uri uri, String selection, String[] selectionArgs) {
+
+        //display the message in the UI
+        Coordinator mCoordinator = Coordinator.getInstance();
+        Log.v(TAG, "DELETE: Request for KEY: " + selection);
+
+        if(CPUri.toString().equals(uri.toString()))
+        {
+
+            if(selection.equals("@")){
+                selection = null;
+                selectionArgs = null;
+                int output = plainDelete(uri, selection, selectionArgs);
+                return output;
+            }
+
+            if(selection.equals("*")){
+
+                selection = null;
+                selectionArgs = null;
+                int output = plainDelete(uri, selection, selectionArgs);
+
+                // forward delete_all message to successor
+                Message deleteAllMessage = mCoordinator.buildMessage(Message.TYPE.DELETE_ALL, "", "");
+                deleteAllMessage.setMessageText(output + "");
+                mCoordinator.mSender.sendMessage(mCoordinator.buildJsonMessage(deleteAllMessage),
+                        mCoordinator.successor);
+
+                // wait till this message comes back tp us
+                mCoordinator.deleteLock.lock();
+                mCoordinator.deleteCondVar.awaitUninterruptibly();
+                mCoordinator.deleteLock.unlock();
+
+                Log.v(TAG, "DELETE: Response: " + mCoordinator.deleteResponse);
+                output = Integer.parseInt(mCoordinator.deleteResponse);
+                mCoordinator.deleteResponse = "FAILED";
+
+                return output;
+            }
+
+            if(amIresponsible(selection)){
+                // given query format is not right, need to re-format
+                selectionArgs = new String[]{selection};
+                selection = "key=?";
+                int output = plainDelete(uri, selection, selectionArgs);
+                return output;
+            }
+            else{
+                // forward delete request to successor
+                Message deleteMessage = mCoordinator.buildMessage(Message.TYPE.DELETE,
+                        selection, "");
+                mCoordinator.mSender.sendMessage(mCoordinator.buildJsonMessage(deleteMessage),
+                        mCoordinator.successor);
+
+                // wait till we receive a response from the responsible node
+                mCoordinator.deleteLock.lock();
+                mCoordinator.deleteCondVar.awaitUninterruptibly();
+                mCoordinator.deleteLock.unlock();
+
+                Log.v(TAG, "Delete: Response: " + mCoordinator.queryResponse);
+                int output = Integer.parseInt(mCoordinator.deleteResponse);
+                mCoordinator.queryResponse = "FAILED";
+                return output;
+            }
+
+        }
+        else
+        {
+            throw new IllegalArgumentException("Unknown URI " + uri);
+        }
+    }
+
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         // TODO Auto-generated method stub
         return 0;
-    }
-
-    private String genHash(String input) throws NoSuchAlgorithmException {
-        MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
-        byte[] sha1Hash = sha1.digest(input.getBytes());
-        Formatter formatter = new Formatter();
-        for (byte b : sha1Hash) {
-            formatter.format("%02x", b);
-        }
-        return formatter.toString();
     }
 
     protected static final class MainDatabaseHelper extends SQLiteOpenHelper {
